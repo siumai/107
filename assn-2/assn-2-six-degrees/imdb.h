@@ -111,7 +111,7 @@ class imdb {
   imdb& operator=(const imdb& rhs);
   imdb& operator=(const imdb& rhs) const;
     
-    film getFilm(const char *movieRecord) const;
+    //film getFilm(const char *movieRecord) const;
     string getActor(const char *actorRecord) const;
     
 };
