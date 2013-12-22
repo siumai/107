@@ -37,6 +37,53 @@ static string promptForActor(const string& prompt, const imdb& db)
   }
 }
 
+
+bool generateShortestPath(const imdb& db, const string& source, const string& target) {
+    list<path> partialPaths;
+    set<string> previouslySeenActors;
+    set<film> previouslySeenFilms;
+    
+    path ppath(source);
+    partialPaths.push_back(ppath);
+    
+    while (!partialPaths.empty() && partialPaths.front().getLength()<=5) {
+        path apath = partialPaths.front();
+        partialPaths.pop_front();
+        string lastplayer = apath.getLastPlayer();
+        cout << "lastplayer: " << lastplayer << endl;
+        vector<film> credits;
+        db.getCredits(lastplayer, credits);
+        for (int i=0; i<credits.size(); i++) {
+            film fm = credits[i];
+            cout << "credit: " << fm.title << endl;
+            
+            set<film>::iterator it = previouslySeenFilms.find(fm);
+            if (it==previouslySeenFilms.end()) {
+                previouslySeenFilms.insert(fm);
+                vector<string> cast;
+                db.getCast(fm, cast);
+                for (int j=0; j<cast.size(); j++) {
+                    string player = cast[j];
+                    cout << "player: " << player << endl;
+                    set<string>::iterator strit = previouslySeenActors.find(player);
+                    if (strit==previouslySeenActors.end()) {
+                        previouslySeenActors.insert(player);
+                        path clonedpath = apath;
+                        clonedpath.addConnection(fm, player);
+                        if (player == target) {
+                            cout << clonedpath << endl;
+                            return true;
+                        } else {
+                            partialPaths.push_back(clonedpath);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /**
  * Serves as the main entry point for the six-degrees executable.
  * There are no parameters to speak of.
@@ -69,8 +116,25 @@ int main(int argc, const char *argv[])
     if (source == target) {
       cout << "Good one.  This is only interesting if you specify two different people." << endl;
     } else {
-      // replace the following line by a call to your generateShortestPath routine... 
-      cout << endl << "No path between those two people could be found." << endl << endl;
+      // replace the following line by a call to your generateShortestPath routine...
+//        path p1(source);
+//        film f1;
+//        f1.title = "Siumaicat";
+//        f1.year = 1990;
+//        p1.addConnection(f1, "siumai");
+//        cout << "path1: " << p1 << endl;
+//        path p2(p1);
+//        film f2;
+//        f2.title = "Hargaucat";
+//        f2.year = 1991;
+//        p1.addConnection(f2, "hargau");
+//        cout << "path2: " << p2 << endl;
+//        cout << "path1: " << p1 << endl;
+
+        bool isConnected = generateShortestPath(db, source, target);
+        if (!isConnected) {
+            cout << endl << "No path between those two people could be found." << endl << endl;
+        }
     }
   }
   
