@@ -20,7 +20,33 @@ typedef struct {
   char *activeField;
 } rssFeedItem;
 
+typedef struct {
+    rssFeedItem rssItem;
+    hashset stopWords;
+    hashset articles;
+    hashset indices;
+} rssFeedData;
+
+typedef struct {
+    char *title;
+    char *url;
+}articleData;
+
+typedef struct {
+    char *word;
+    vector counters;
+}indexData;
+
+typedef struct {
+    articleData articleItem;
+    int count;
+}wordCounter;
+
 static void Welcome(const char *welcomeTextURL);
+static void CreateDataStructure(rssFeedData *data);
+static int StringHash(const void *elemAddr, int numBuckets);
+static int StringCmp(const void *elemAddr1, const void *elemAddr2);
+static void StringFree(void *elemAddr);
 static void BuildIndices(const char *feedsFileURL);
 static void ProcessFeed(const char *remoteDocumentURL);
 static void PullAllNewsItems(urlconnection *urlconn);
@@ -49,17 +75,48 @@ static bool WordIsWellFormed(const char *word);
  *         within the code base that end the program abnormally)
  */
 
-static const char *const kWelcomeTextURL = "http://varren.site44.com/welcome.txt";
+static const char *const kWelcomeTextURL = "https://www.dropbox.com/s/dr2w4refgn4a1gi/welcome.txt";
 static const char *const kDefaultStopWordsURL = "http://varren.site44.com/stop-words.txt";
 static const char *const kDefaultFeedsFileURL = "http://varren.site44.com/rss-feeds.txt";
 int main(int argc, char **argv)
 {
   const char *feedsFileURL = (argc == 1) ? kDefaultFeedsFileURL : argv[1];
   
-  Welcome(kWelcomeTextURL);
-  BuildIndices(feedsFileURL);
-  QueryIndices();
+    Welcome(kWelcomeTextURL);
+
+    //rssFeedData rssFData;
+    //CreateDataStructure(&rssFData);
+  
+  //BuildIndices(feedsFileURL);
+  //QueryIndices();
   return 0;
+}
+
+static const int kNumStopWordsBuckets = 1009;
+static void CreateDataStructure(rssFeedData *data) {
+    HashSetNew(&(data->stopWords), sizeof(char *), kNumStopWordsBuckets, StringHash, StringCmp, StringFree);
+    //HashSetNew(&(data->articles), sizeof(articleData), kNumStopWordsBuckets, ArticleHash, ArticleCmp, ArticleFree);
+    //HashSetNew(&(data->indices), sizeof(indexData), kNumStopWordsBuckets, IndexHash, IndexCmp, IndexFree);
+}
+
+static const signed long kHashMultiplier = -1664117991L;
+static int StringHash(const void *elemAddr, int numBuckets) {
+    char *s = (char *)elemAddr;
+    int i;
+    unsigned long hashcode = 0;
+    
+    for (i = 0; i < strlen(s); i++)
+        hashcode = hashcode * kHashMultiplier + tolower(s[i]);
+    
+    return hashcode % numBuckets;
+}
+
+static int StringCmp(const void *s1, const void *s2) {
+    return strcasecmp((char *)s1, (char *)s2);
+}
+
+static void StringFree(char *s) {
+    free(s);
 }
 
 /** 
