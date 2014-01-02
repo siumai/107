@@ -75,7 +75,7 @@ static bool WordIsWellFormed(const char *word);
  *         within the code base that end the program abnormally)
  */
 
-static const char *const kWelcomeTextURL = "https://www.dropbox.com/s/dr2w4refgn4a1gi/welcome.txt";
+static const char *const kWelcomeTextURL = "http://varren.site44.com/welcome.txt";
 static const char *const kDefaultStopWordsURL = "http://varren.site44.com/stop-words.txt";
 static const char *const kDefaultFeedsFileURL = "http://varren.site44.com/rss-feeds.txt";
 int main(int argc, char **argv)
@@ -84,8 +84,20 @@ int main(int argc, char **argv)
   
     Welcome(kWelcomeTextURL);
 
-    //rssFeedData rssFData;
-    //CreateDataStructure(&rssFData);
+    char *smstr = "siumai";
+    char *hgstr = "hargau";
+    
+    rssFeedData rssFData;
+    CreateDataStructure(&rssFData);
+    
+    HashSetEnter(&(rssFData->stopWords), smstr);
+    //HashSetEnter(&(rssFData->stopWords), hgstr);
+    void *found = HashSetLookup(&(rssFData->stopWords), smstr);
+    if (found!=NULL) {
+        printf("found siumai: %s", (char *)found);
+    } else {
+        printf("cant find siumai");
+    }
   
   //BuildIndices(feedsFileURL);
   //QueryIndices();
@@ -115,7 +127,8 @@ static int StringCmp(const void *s1, const void *s2) {
     return strcasecmp((char *)s1, (char *)s2);
 }
 
-static void StringFree(char *s) {
+static void StringFree(void *elemAddr) {
+    char *s = (char *)elemAddr;
     free(s);
 }
 
