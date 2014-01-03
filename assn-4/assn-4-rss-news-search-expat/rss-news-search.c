@@ -48,9 +48,9 @@ static void CreateDataStructure(rssFeedData *data);
 static int StringHash(const void *elemAddr, int numBuckets);
 static int StringCmp(const void *elemAddr1, const void *elemAddr2);
 static void StringFree(void *elemAddr);
-static void BuildIndices(const char *feedsFileURL);
-static void ProcessFeed(const char *remoteDocumentURL);
-static void PullAllNewsItems(urlconnection *urlconn);
+static void BuildIndices(const char *feedsFileURL, rssFeedData *dataPtr);
+static void ProcessFeed(const char *remoteDocumentURL, rssFeedData *dataPtr);
+static void PullAllNewsItems(urlconnection *urlconn, rssFeedData *dataPtr);
 static void ProcessStartTag(void *userData, const char *name, const char **atts);
 static void ProcessEndTag(void *userData, const char *name);
 static void ProcessTextData(void *userData, const char *text, int len);
@@ -89,8 +89,10 @@ int main(int argc, char **argv)
     CreateDataStructure(&rssFData);
     
     LoadStopWords(kDefaultStopWordsURL, &rssFData);
+    
+    //void *found = HashSetLookup(&(rssFData.stopWords), &smstr);
   
-  //BuildIndices(feedsFileURL);
+    BuildIndices(feedsFileURL, &rssFData);
   //QueryIndices();
   return 0;
 }
@@ -213,7 +215,7 @@ static void LoadStopWords(const char *stopWordsURL, rssFeedData *dataPtr) {
  */
 
 static const int kNumIndexEntryBuckets = 10007;
-static void BuildIndices(const char *feedsFileURL)
+static void BuildIndices(const char *feedsFileURL, rssFeedData *dataPtr)
 {
   url u;
   urlconnection urlconn;
@@ -222,7 +224,7 @@ static void BuildIndices(const char *feedsFileURL)
   URLConnectionNew(&urlconn, &u);
   
   if (urlconn.responseCode / 100 == 3) { // redirection, so recurse
-    BuildIndices(urlconn.newUrl);
+    BuildIndices(urlconn.newUrl, dataPtr);
   } else {
     streamtokenizer st;
     char remoteDocumentURL[2048];
@@ -231,7 +233,7 @@ static void BuildIndices(const char *feedsFileURL)
     while (STSkipUntil(&st, ":") != EOF) { // ignore everything up to the first selicolon of the line
       STSkipOver(&st, ": ");		   // now ignore the semicolon and any whitespace directly after it
       STNextToken(&st, remoteDocumentURL, sizeof(remoteDocumentURL));   
-      ProcessFeed(remoteDocumentURL);
+      ProcessFeed(remoteDocumentURL, dataPtr);
     }
     
     printf("\n");
@@ -251,7 +253,7 @@ static void BuildIndices(const char *feedsFileURL)
  * for ParseArticle for information about what the different response codes mean.
  */
 
-static void ProcessFeed(const char *remoteDocumentURL)
+static void ProcessFeed(const char *remoteDocumentURL, rssFeedData *dataPtr)
 {
   url u;
   urlconnection urlconn;
@@ -262,10 +264,10 @@ static void ProcessFeed(const char *remoteDocumentURL)
   switch (urlconn.responseCode) {
       case 0: printf("Unable to connect to \"%s\".  Ignoring...", u.serverName);
               break;
-      case 200: PullAllNewsItems(&urlconn);
+      case 200: PullAllNewsItems(&urlconn, dataPtr);
                 break;
       case 301: 
-      case 302: ProcessFeed(urlconn.newUrl);
+      case 302: ProcessFeed(urlconn.newUrl, dataPtr);
                 break;
       default: printf("Connection to \"%s\" was established, but unable to retrieve \"%s\". [response code: %d, response message:\"%s\"]\n",
 		      u.serverName, u.fileName, urlconn.responseCode, urlconn.responseMessage);
@@ -299,14 +301,14 @@ static void ProcessFeed(const char *remoteDocumentURL)
  *
  */
 
-static void PullAllNewsItems(urlconnection *urlconn)
+static void PullAllNewsItems(urlconnection *urlconn, rssFeedData *dataPtr)
 {
-  rssFeedItem item;
+  //rssFeedItem item;
   streamtokenizer st;
   char buffer[2048];
 
   XML_Parser rssFeedParser = XML_ParserCreate(NULL);
-  XML_SetUserData(rssFeedParser, &item);
+  XML_SetUserData(rssFeedParser, dataPtr);
   XML_SetElementHandler(rssFeedParser, ProcessStartTag, ProcessEndTag);
   XML_SetCharacterDataHandler(rssFeedParser, ProcessTextData);
 
@@ -342,7 +344,8 @@ static void PullAllNewsItems(urlconnection *urlconn)
 
 static void ProcessStartTag(void *userData, const char *name, const char **atts)
 {
-  rssFeedItem *item = userData;
+  rssFeedData *data = (rssFeedData *)userData;
+  rssFeedItem *item = &(data->rssItem);
   if (strcasecmp(name, "item") == 0) {
     memset(item, 0, sizeof(rssFeedItem));
   } else if (strcasecmp(name, "title") == 0) {
@@ -370,7 +373,8 @@ static void ProcessStartTag(void *userData, const char *name, const char **atts)
 
 static void ProcessEndTag(void *userData, const char *name)
 {
-  rssFeedItem *item = userData;
+  rssFeedData *data = (rssFeedData *)userData;
+  rssFeedItem *item = &(data->rssItem);
   item->activeField = NULL;
   if (strcasecmp(name, "item") == 0)
     ParseArticle(item->title, item->url);
@@ -399,7 +403,8 @@ static void ProcessEndTag(void *userData, const char *name)
 
 static void ProcessTextData(void *userData, const char *text, int len)
 {
-  rssFeedItem *item = userData;
+  rssFeedData *data = (rssFeedData *)userData;
+  rssFeedItem *item = &(data->rssItem);
   if (item->activeField == NULL) return; // no place to put data
   char buffer[len + 1];
   memcpy(buffer, text, len);
