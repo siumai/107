@@ -43,6 +43,7 @@ typedef struct {
 }wordCounter;
 
 static void Welcome(const char *welcomeTextURL);
+static void LoadStopWords(const char *stopWordsURL, rssFeedData *dataPtr);
 static void CreateDataStructure(rssFeedData *data);
 static int StringHash(const void *elemAddr, int numBuckets);
 static int StringCmp(const void *elemAddr1, const void *elemAddr2);
@@ -83,21 +84,11 @@ int main(int argc, char **argv)
   const char *feedsFileURL = (argc == 1) ? kDefaultFeedsFileURL : argv[1];
   
     Welcome(kWelcomeTextURL);
-
-    char *smstr = "siumai";
-    char *hgstr = "hargau";
     
     rssFeedData rssFData;
     CreateDataStructure(&rssFData);
     
-    HashSetEnter(&(rssFData->stopWords), smstr);
-    //HashSetEnter(&(rssFData->stopWords), hgstr);
-    void *found = HashSetLookup(&(rssFData->stopWords), smstr);
-    if (found!=NULL) {
-        printf("found siumai: %s", (char *)found);
-    } else {
-        printf("cant find siumai");
-    }
+    LoadStopWords(kDefaultStopWordsURL, &rssFData);
   
   //BuildIndices(feedsFileURL);
   //QueryIndices();
@@ -106,14 +97,14 @@ int main(int argc, char **argv)
 
 static const int kNumStopWordsBuckets = 1009;
 static void CreateDataStructure(rssFeedData *data) {
-    HashSetNew(&(data->stopWords), sizeof(char *), kNumStopWordsBuckets, StringHash, StringCmp, StringFree);
+    HashSetNew(&(data->stopWords), sizeof(char **), kNumStopWordsBuckets, StringHash, StringCmp, StringFree);
     //HashSetNew(&(data->articles), sizeof(articleData), kNumStopWordsBuckets, ArticleHash, ArticleCmp, ArticleFree);
     //HashSetNew(&(data->indices), sizeof(indexData), kNumStopWordsBuckets, IndexHash, IndexCmp, IndexFree);
 }
 
 static const signed long kHashMultiplier = -1664117991L;
 static int StringHash(const void *elemAddr, int numBuckets) {
-    char *s = (char *)elemAddr;
+    char *s = *(char **)elemAddr;
     int i;
     unsigned long hashcode = 0;
     
@@ -123,12 +114,14 @@ static int StringHash(const void *elemAddr, int numBuckets) {
     return hashcode % numBuckets;
 }
 
-static int StringCmp(const void *s1, const void *s2) {
-    return strcasecmp((char *)s1, (char *)s2);
+static int StringCmp(const void *elemAddr1, const void *elemAddr2) {
+    char *s1 = *(char **)elemAddr1;
+    char *s2 = *(char **)elemAddr2;
+    return strcasecmp(s1, s2);
 }
 
 static void StringFree(void *elemAddr) {
-    char *s = (char *)elemAddr;
+    char *s = *(char **)elemAddr;
     free(s);
 }
 
@@ -175,6 +168,31 @@ static void Welcome(const char *welcomeTextURL)
   URLDispose(&u);
 }
 
+
+static void LoadStopWords(const char *stopWordsURL, rssFeedData *dataPtr) {
+	url u;
+	urlconnection urlconn;
+	
+	URLNewAbsolute(&u, stopWordsURL);
+	URLConnectionNew(&urlconn, &u);
+
+	if(urlconn.responseCode / 100 == 3) {
+		LoadStopWords(urlconn.newUrl, dataPtr);
+	} else {
+		streamtokenizer st;
+		char buffer[4096];
+		STNew(&st, urlconn.dataStream, kNewLineDelimiters, true);
+		while (STNextToken(&st, buffer, sizeof(buffer))) {
+      			char *s = strdup(buffer);
+			HashSetEnter(&(dataPtr->stopWords), &s);
+			//printf("%s\n", buffer);
+    		}  
+    		printf("\n");
+    		STDispose(&st); 
+	}
+	URLConnectionDispose(&urlconn);
+  	URLDispose(&u);
+}
 /**
  * Function: BuildIndices
  * ----------------------
