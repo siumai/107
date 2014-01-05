@@ -45,17 +45,23 @@ typedef struct {
 static void Welcome(const char *welcomeTextURL);
 static void LoadStopWords(const char *stopWordsURL, rssFeedData *dataPtr);
 static void CreateDataStructure(rssFeedData *data);
+static void DisposeDataStructure(rssFeedData *data);
 static int StringHash(const void *elemAddr, int numBuckets);
 static int StringCmp(const void *elemAddr1, const void *elemAddr2);
 static void StringFree(void *elemAddr);
+static int ArticleHash(const void *elemAddr, int numBuckets);
+static int ArticleCmp(const void *elemAddr1, const void *elemAddr2);
+static void ArticleFree(void *elemAddr);
+
 static void BuildIndices(const char *feedsFileURL, rssFeedData *dataPtr);
 static void ProcessFeed(const char *remoteDocumentURL, rssFeedData *dataPtr);
 static void PullAllNewsItems(urlconnection *urlconn, rssFeedData *dataPtr);
 static void ProcessStartTag(void *userData, const char *name, const char **atts);
 static void ProcessEndTag(void *userData, const char *name);
 static void ProcessTextData(void *userData, const char *text, int len);
-static void ParseArticle(const char *articleTitle, const char *articleURL);
-static void ScanArticle(streamtokenizer *st, const char *articleTitle, const char *articleURL);
+static void ParseArticle(rssFeedData *userData);
+static articleData* addArticle(hashset *articles, rssFeedItem *item);
+static void ScanArticle(streamtokenizer *st, rssFeedData *userData);
 static void QueryIndices();
 static void ProcessResponse(const char *word);
 static bool WordIsWellFormed(const char *word);
@@ -88,20 +94,28 @@ int main(int argc, char **argv)
     rssFeedData rssFData;
     CreateDataStructure(&rssFData);
     
+    
     LoadStopWords(kDefaultStopWordsURL, &rssFData);
     
     //void *found = HashSetLookup(&(rssFData.stopWords), &smstr);
   
     BuildIndices(feedsFileURL, &rssFData);
   //QueryIndices();
+    DisposeDataStructure(&rssFData);
   return 0;
 }
 
 static const int kNumStopWordsBuckets = 1009;
 static void CreateDataStructure(rssFeedData *data) {
     HashSetNew(&(data->stopWords), sizeof(char **), kNumStopWordsBuckets, StringHash, StringCmp, StringFree);
-    //HashSetNew(&(data->articles), sizeof(articleData), kNumStopWordsBuckets, ArticleHash, ArticleCmp, ArticleFree);
+    HashSetNew(&(data->articles), sizeof(articleData*), kNumStopWordsBuckets, ArticleHash, ArticleCmp, ArticleFree);
     //HashSetNew(&(data->indices), sizeof(indexData), kNumStopWordsBuckets, IndexHash, IndexCmp, IndexFree);
+    //printf("data created\n");
+}
+
+static void DisposeDataStructure(rssFeedData *data) {
+	HashSetDispose(&(data->stopWords));
+	HashSetDispose(&(data->articles));
 }
 
 static const signed long kHashMultiplier = -1664117991L;
@@ -125,6 +139,28 @@ static int StringCmp(const void *elemAddr1, const void *elemAddr2) {
 static void StringFree(void *elemAddr) {
     char *s = *(char **)elemAddr;
     free(s);
+}
+
+static int ArticleHash(const void *elemAddr, int numBuckets) {
+	articleData *data = *(articleData **)elemAddr;
+	return StringHash(&(data->title), numBuckets);
+}
+
+static int ArticleCmp(const void *elemAddr1, const void *elemAddr2) {
+	articleData* ad1 = *(articleData **)elemAddr1;
+	articleData* ad2 = *(articleData **)elemAddr2;
+	if(strcasecmp(ad1->url, ad2->url)==0 || strcasecmp(ad1->title, ad2->title)==0) {
+		return 0;
+	}
+
+	return strcasecmp(ad1->url, ad2->url);
+}
+
+static void ArticleFree(void *elemAddr) {
+	articleData* datap = *(articleData **)elemAddr;
+	free(datap->url);
+	free(datap->title);
+	free(datap);
 }
 
 /** 
@@ -303,7 +339,6 @@ static void ProcessFeed(const char *remoteDocumentURL, rssFeedData *dataPtr)
 
 static void PullAllNewsItems(urlconnection *urlconn, rssFeedData *dataPtr)
 {
-  //rssFeedItem item;
   streamtokenizer st;
   char buffer[2048];
 
@@ -376,8 +411,9 @@ static void ProcessEndTag(void *userData, const char *name)
   rssFeedData *data = (rssFeedData *)userData;
   rssFeedItem *item = &(data->rssItem);
   item->activeField = NULL;
-  if (strcasecmp(name, "item") == 0)
-    ParseArticle(item->title, item->url);
+  if (strcasecmp(name, "item") == 0) {
+	ParseArticle(data);
+  }
 }
 
 /**
@@ -435,8 +471,11 @@ static void ProcessTextData(void *userData, const char *text, int len)
  */
 
 static const char *const kTextDelimiters = " \t\n\r\b!@$%^*()_+={[}]|\\'\":;/?.>,<~`";
-static void ParseArticle(const char *articleTitle, const char *articleURL)
+static void ParseArticle(rssFeedData *data)
 {
+  rssFeedItem *item = &(data->rssItem);
+  char *articleTitle = item->title;
+  char *articleURL = item->url;
   url u;
   urlconnection urlconn;
   streamtokenizer st;
@@ -449,12 +488,13 @@ static void ParseArticle(const char *articleTitle, const char *articleURL)
               break;
       case 200: printf("[%s] Indexing \"%s\"\n", u.serverName, articleTitle);
 	        STNew(&st, urlconn.dataStream, kTextDelimiters, false);
-		ScanArticle(&st, articleTitle, articleURL);
+		ScanArticle(&st, data);
 		STDispose(&st);
 		break;
       case 301: 
       case 302: // just pretend we have the redirected URL all along, though index using the new URL and not the old one...
-	        ParseArticle(articleTitle, urlconn.newUrl);
+		strcpy(item->url, urlconn.newUrl);
+		ParseArticle(data);
 		break;
       default: printf("Unable to pull \"%s\" from \"%s\". [Response code: %d] Punting...\n", articleTitle, u.serverName, urlconn.responseCode);
 	       break;
@@ -476,9 +516,31 @@ static void ParseArticle(const char *articleTitle, const char *articleURL)
  * This is really a placeholder implementation for what will ultimately be
  * code that indexes the specified content.
  */
+static articleData* addArticle(hashset *articles, rssFeedItem *item) {
+	articleData article;
+	article.title = item->title;
+	article.url = item->url;
+	articleData *articleP = &article;
+	void *found = HashSetLookup(articles, &articleP);
+	if(found == NULL) {
+		articleData *newArticle = malloc(sizeof(articleData));
+		newArticle->title = strdup(item->title);
+		newArticle->url = strdup(item->url);
+		HashSetEnter(articles, &newArticle);
+		return newArticle;
+	} else {
+		return *(articleData**)found;
+	}
+}
 
-static void ScanArticle(streamtokenizer *st, const char *articleTitle, const char *articleURL)
+
+static void ScanArticle(streamtokenizer *st, rssFeedData *data)
 {
+  articleData *article = addArticle(&data->articles, &data->rssItem);
+  /*rssFeedItem *item = &(data->rssItem);
+  char *articleTitle = item->title;
+  char *articleURL = item->url;*/
+
   int numWords = 0;
   char word[1024];
   char longestWord[1024] = {'\0'};
