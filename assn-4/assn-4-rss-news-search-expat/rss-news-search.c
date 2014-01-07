@@ -38,7 +38,7 @@ typedef struct {
 }indexData;
 
 typedef struct {
-    articleData articleItem;
+    articleData *articleItem;
     int count;
 }wordCounter;
 
@@ -52,7 +52,10 @@ static void StringFree(void *elemAddr);
 static int ArticleHash(const void *elemAddr, int numBuckets);
 static int ArticleCmp(const void *elemAddr1, const void *elemAddr2);
 static void ArticleFree(void *elemAddr);
-
+static void ArticleMap(void *elemAddr, void *auxData);
+static int IndexHash(const void *elemAddr, int numBuckets);
+static int IndexCmp(const void *elemAddr1, const void *elemAddr2);
+static void IndexFree(void *elemAddr);
 static void BuildIndices(const char *feedsFileURL, rssFeedData *dataPtr);
 static void ProcessFeed(const char *remoteDocumentURL, rssFeedData *dataPtr);
 static void PullAllNewsItems(urlconnection *urlconn, rssFeedData *dataPtr);
@@ -61,10 +64,15 @@ static void ProcessEndTag(void *userData, const char *name);
 static void ProcessTextData(void *userData, const char *text, int len);
 static void ParseArticle(rssFeedData *userData);
 static articleData* addArticle(hashset *articles, rssFeedItem *item);
+static indexData* addWordRecord(hashset *indices, char *word);
+static void indexWord(vector *counters, articleData *article);
+static int FindArticleRecordCmpFn(const void *oneP, const void *twoP);
 static void ScanArticle(streamtokenizer *st, rssFeedData *userData);
 static void QueryIndices();
-static void ProcessResponse(const char *word);
+static void ProcessResponse(const char *word, void* userData);
+static void PrintResultMapFn(void *elemAddr, void*auxData);
 static bool WordIsWellFormed(const char *word);
+static int SortVectorCmpFn(const void *one, const void *two);
 
 /**
  * Function: main
@@ -100,7 +108,8 @@ int main(int argc, char **argv)
     //void *found = HashSetLookup(&(rssFData.stopWords), &smstr);
   
     BuildIndices(feedsFileURL, &rssFData);
-  //QueryIndices();
+    //HashSetMap(&(rssFData.articles), ArticleMap, NULL);
+    QueryIndices(&rssFData);
     DisposeDataStructure(&rssFData);
   return 0;
 }
@@ -109,13 +118,14 @@ static const int kNumStopWordsBuckets = 1009;
 static void CreateDataStructure(rssFeedData *data) {
     HashSetNew(&(data->stopWords), sizeof(char **), kNumStopWordsBuckets, StringHash, StringCmp, StringFree);
     HashSetNew(&(data->articles), sizeof(articleData*), kNumStopWordsBuckets, ArticleHash, ArticleCmp, ArticleFree);
-    //HashSetNew(&(data->indices), sizeof(indexData), kNumStopWordsBuckets, IndexHash, IndexCmp, IndexFree);
+    HashSetNew(&(data->indices), sizeof(indexData), kNumStopWordsBuckets, IndexHash, IndexCmp, IndexFree);
     //printf("data created\n");
 }
 
 static void DisposeDataStructure(rssFeedData *data) {
 	HashSetDispose(&(data->stopWords));
 	HashSetDispose(&(data->articles));
+	HashSetDispose(&(data->indices));
 }
 
 static const signed long kHashMultiplier = -1664117991L;
@@ -163,6 +173,46 @@ static void ArticleFree(void *elemAddr) {
 	free(datap);
 }
 
+static void ArticleMap(void *elemAddr, void *auxData) {
+	articleData *data = *(articleData **)elemAddr;
+	printf("article: %s\n url: %s\n", data->title, data->url);
+	fflush(stdout);
+}
+
+static int IndexHash(const void *elemAddr, int numBuckets) {
+	const indexData *data = elemAddr;
+	return StringHash(&data->word, numBuckets);
+}
+
+static int IndexCmp(const void *elemAddr1, const void *elemAddr2) {
+	const indexData *one = elemAddr1;
+	const indexData *two = elemAddr2;
+	return strcasecmp(one->word, two->word);
+}
+
+static void IndexFree(void *elemAddr) {
+	indexData *data = elemAddr;
+	free(data->word);
+	VectorDispose(&data->counters);
+}
+
+static int FindArticleRecordCmpFn(const void *oneP, const void *twoP) {
+	const wordCounter* one = oneP;
+	const wordCounter* two = twoP;
+	return ArticleCmp(&one->articleItem, &two->articleItem);
+}
+
+static int SortVectorCmpFn(const void *one, const void *two) {
+	const wordCounter* first = one;
+	const wordCounter* second = two;
+	if(first->count > second->count) {
+		return -1;
+	} else if(first->count < second->count) {
+		return 1;
+	} else {
+		return 0;
+	}
+}
 /** 
  * Function: Welcome
  * -----------------
@@ -533,6 +583,36 @@ static articleData* addArticle(hashset *articles, rssFeedItem *item) {
 	}
 }
 
+static indexData* addWordRecord(hashset *indices, char *word) {
+	indexData index;
+	index.word = word;
+	
+	void *found = HashSetLookup(indices, &index);
+	if(found == NULL) {
+		index.word = strdup(word);
+		VectorNew(&(index.counters), sizeof(wordCounter), NULL, 1);
+		HashSetEnter(indices, &index);
+		return HashSetLookup(indices, &index);
+	} else {
+		return (indexData*)found;
+	}
+}
+
+static void indexWord(vector *counters, articleData *article) {
+	wordCounter indexEntry;
+	indexEntry.articleItem = article;
+	
+	int elemPosition = VectorSearch(counters, &indexEntry, FindArticleRecordCmpFn, 0, false);
+	
+	if(elemPosition == -1) {
+		indexEntry.count = 1;
+		VectorAppend(counters, &indexEntry);
+	} else {
+		wordCounter* record = VectorNth(counters, elemPosition);
+		record->count++;
+	}
+}
+
 
 static void ScanArticle(streamtokenizer *st, rssFeedData *data)
 {
@@ -551,9 +631,15 @@ static void ScanArticle(streamtokenizer *st, rssFeedData *data)
     } else {
       RemoveEscapeCharacters(word);
       if (WordIsWellFormed(word)) {
-	numWords++;
-	if (strlen(word) > strlen(longestWord))
-	  strcpy(longestWord, word);
+	char *dummy = word;
+	if (HashSetLookup(&(data->stopWords), &dummy)==NULL) {
+		//not in stop list, index the word
+		indexData *entry = addWordRecord(&data->indices, word);
+		indexWord(&entry->counters, article);
+		numWords++;
+		if (strlen(word) > strlen(longestWord))
+	  		strcpy(longestWord, word);
+	}
       }
     }
   }
@@ -572,7 +658,7 @@ static void ScanArticle(streamtokenizer *st, rssFeedData *data)
  * then proceeds (via ProcessResponse) to list up to 10 articles (sorted by relevance)
  * that contain that word.
  */
-static void QueryIndices()
+static void QueryIndices(void* userData)
 {
   char response[1024];
   while (true) {
@@ -580,7 +666,7 @@ static void QueryIndices()
     fgets(response, sizeof(response), stdin);
     response[strlen(response) - 1] = '\0';
     if (strcasecmp(response, "") == 0) break;
-    ProcessResponse(response);
+    ProcessResponse(response, userData);
   }
 }
 
@@ -590,12 +676,29 @@ static void QueryIndices()
  * Placeholder implementation for what will become the search of a set of indices
  * for a list of web documents containing the specified word.
  */
-
-static void ProcessResponse(const char *word)
+static void PrintResultMapFn(void *elemAddr, void*auxData) {
+	wordCounter *data = elemAddr;
+	printf("\n %d)\t Article:: %s Count:: %d", (*(int*)auxData)++, data->articleItem->title, data->count);
+	fflush(stdout);
+}
+static void ProcessResponse(const char *word, void *userData)
 {
   if (WordIsWellFormed(word)) {
-    printf("\tWell, we don't have the database mapping words to online news articles yet, but if we DID have\n");
-    printf("\tour hashset of indices, we'd list all of the articles containing \"%s\".\n", word);
+	rssFeedData *data = userData;
+	if(HashSetLookup(&data->stopWords, &word)==NULL) {
+		indexData *resultData = HashSetLookup(&data->indices, &word);
+		if(resultData!=NULL) {
+			vector resultVector = resultData->counters;
+			printf("there are %d records of this word", VectorLength(&resultVector));
+			VectorSort(&resultVector, SortVectorCmpFn);
+			int i=1;
+			VectorMap(&resultVector, PrintResultMapFn, &i);
+			printf("\n");
+		} else {
+			printf("\tWe don't have records about %s into our set of indices.\n", word);
+		}
+	}
+    
   } else {
     printf("\tWe won't be allowing words like \"%s\" into our set of indices.\n", word);
   }
